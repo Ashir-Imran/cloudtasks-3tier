@@ -1,0 +1,84 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  s3mock:           # local stand-in for Amazon S3 (MinIO images were removed from Docker Hub)
+    image: adobe/s3mock:latest
+    environment:
+      initialBuckets: ${S3_BUCKET}
+    networks: [backend]
+
+  app:
+    build: ./app
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ENDPOINT: http://s3mock:9090
+      S3_AUTO_CREATE: "1"
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+      AWS_REGION: us-east-1
+    depends_on:
+      db:
+        condition: service_healthy
+      s3mock:
+        condition: service_started
+    networks: [frontend, backend]
+
+  web:
+    build: ./web
+    environment:
+      APP_UPSTREAM: app:5000
+      NGINX_RESOLVER: 127.0.0.11
+    ports:
+      - "8080:80"
+    depends_on: [app]
+    networks: [frontend]
+
+  # ---- optional: docker compose --profile monitoring up --build
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["monitoring"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on: [app]
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [prometheus]
+    networks: [backend]
+
+networks:
+  frontend:     # web <-> app
+  backend:      # app <-> db / storage / monitoring (web cannot reach it)
+
+volumes:
+  pgdata:

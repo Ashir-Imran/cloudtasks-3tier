@@ -1,0 +1,59 @@
+limit_req_zone $binary_remote_addr zone=authzone:10m rate=5r/s;
+limit_req_zone $binary_remote_addr zone=apizone:10m rate=30r/s;
+limit_req_status 429;
+
+server {
+    listen 80;
+    server_name _;
+    server_tokens off;
+
+    # Real client IP when behind the AWS load balancer
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
+    client_max_body_size 6m;
+
+    # Re-resolve the app tier DNS name (needed for an internal load balancer)
+    resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+    set $app_upstream "${APP_UPSTREAM}";
+
+    gzip on;
+    gzip_min_length 512;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+
+    # Security headers
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Content-Security-Policy "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'" always;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /index.html { expires -1; }
+    location ~* \.(css|js)$ { expires 1h; }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Stricter rate limit on login/register (brute-force protection)
+    location /api/auth/ {
+        limit_req zone=authzone burst=10 nodelay;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+
+    location /api/ {
+        limit_req zone=apizone burst=60 nodelay;
+        include /etc/nginx/snippets/proxy.conf;
+    }
+
+    # Health check endpoint for the load balancer
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+}

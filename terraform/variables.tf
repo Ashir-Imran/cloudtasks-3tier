@@ -22,6 +22,18 @@ variable "github_repo" {
   default     = "Ashir-Imran/cloudtasks-3tier"
 }
 
+variable "github_owner_id" {
+  description = "Numeric ID of the GitHub account that owns the repo (needed for GitHub's immutable OIDC subject)"
+  type        = string
+  default     = "156171093"
+}
+
+variable "github_repo_id" {
+  description = "Numeric ID of the GitHub repository (needed for GitHub's immutable OIDC subject)"
+  type        = string
+  default     = "1449592187"
+}
+
 variable "image_tag" {
   description = "Docker image tag the servers pull from GHCR"
   type        = string

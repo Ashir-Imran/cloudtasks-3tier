@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   test:
@@ -61,3 +62,38 @@ jobs:
             ghcr.io/${{ env.OWNER }}/cloudtasks-web:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-and-push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Rolling update (app tier, then web tier)
+        run: |
+          refresh() {
+            ASG="$1"
+            ID=$(aws autoscaling start-instance-refresh \
+              --auto-scaling-group-name "$ASG" \
+              --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":180}' \
+              --query InstanceRefreshId --output text)
+            echo "Started refresh $ID on $ASG"
+            for i in $(seq 1 90); do
+              STATUS=$(aws autoscaling describe-instance-refreshes \
+                --auto-scaling-group-name "$ASG" --instance-refresh-ids "$ID" \
+                --query 'InstanceRefreshes[0].Status' --output text)
+              echo "$ASG: $STATUS"
+              case "$STATUS" in
+                Successful) return 0 ;;
+                Failed|Cancelled|RollbackFailed|RollbackSuccessful) return 1 ;;
+              esac
+              sleep 20
+            done
+            return 1
+          }
+          refresh cloudtasks-app-asg
+          refresh cloudtasks-web-asg
